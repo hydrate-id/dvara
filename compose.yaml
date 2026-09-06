@@ -1,0 +1,27 @@
+name: dvara
+
+services:
+  dvara:
+    build:
+      context: .
+      args:
+        CAMOUFOX_VERSION: 152.0.4-beta.30
+        # ganti ke arm64 kalau deploy di node ARM (macOS arm / Ampere)
+        CAMOUFOX_ARCH: ${CAMOUFOX_ARCH:-x86_64}
+    image: dvara:latest
+    ports:
+      - "${DVARA_PORT:-8080}:8080"
+    environment:
+      DVARA_API_KEY: ${DVARA_API_KEY:-}
+      DVARA_POOL_SIZE: ${DVARA_POOL_SIZE:-4}
+      DVARA_MAX_CONCURRENT: ${DVARA_MAX_CONCURRENT:-12}
+      DVARA_TIMEOUT_S: ${DVARA_TIMEOUT_S:-70}
+      DVARA_DEFAULT_PROXY: ${DVARA_DEFAULT_PROXY:-}
+    volumes:
+      - dvara-data:/data
+    restart: unless-stopped
+    mem_limit: ${DVARA_MEM_LIMIT:-4g}
+    cpus: ${DVARA_CPUS:-4}
+
+volumes:
+  dvara-data:

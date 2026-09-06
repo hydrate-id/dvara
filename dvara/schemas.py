@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 WaitUntil = Literal["load", "domcontentloaded", "networkidle"]
 
@@ -66,43 +66,3 @@ class ExtractResult(BaseModel):
 
 def http_error(status_code: int, code: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message}}
-
-
-# query params aliases (GET usage)
-RENDER_QUERY = {
-    "url": str,
-    "wait_until": WaitUntil,
-    "wait_for": str | None,
-    "wait_timeout_ms": int | None,
-    "delay_ms": int | None,
-    "session_id": str | None,
-    "proxy": str | None,
-    "unwrap": bool | None,
-    "timeout_s": int | None,
-    "response_format": str | None,
-}
-
-EXTRACT_QUERY = {
-    "url": str,
-    "wait_until": WaitUntil,
-    "wait_for": str | None,
-    "delay_ms": int | None,
-    "session_id": str | None,
-    "proxy": str | None,
-    "unwrap": bool | None,
-    "timeout_s": int | None,
-}
-
-SCREENSHOT_QUERY = {
-    "url": str,
-    "wait_until": WaitUntil,
-    "wait_for": str | None,
-    "delay_ms": int | None,
-    "session_id": str | None,
-    "proxy": str | None,
-    "unwrap": bool | None,
-    "timeout_s": int | None,
-    "format": str | None,
-    "quality": int | None,
-    "full_page": bool | None,
-}

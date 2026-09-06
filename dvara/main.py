@@ -4,10 +4,10 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Awaitable, Callable
+from typing import Annotated, Any, Awaitable, Callable, Literal
 from urllib.parse import unquote, urlparse
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 from .config import settings
@@ -23,6 +23,7 @@ from .schemas import (
     ExtractResult,
     RenderRequest,
     ScreenshotRequest,
+    WaitUntil,
     http_error,
 )
 from .sessions import SessionStore
@@ -60,40 +61,6 @@ def _check_auth(request: Request) -> JSONResponse | None:
     if key != settings.api_key:
         return _unauthorized()
     return None
-
-
-def _to_bool(v: Any) -> bool | None:
-    if v is None:
-        return None
-    if isinstance(v, bool):
-        return v
-    return str(v).lower() in ("1", "true", "yes", "on")
-
-
-async def _read_body(request: Request) -> dict:
-    try:
-        data = await request.json()
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _from_query(request: Request, fields: dict[str, Any]) -> dict:
-    out: dict[str, Any] = {}
-    q = request.query_params
-    for key, typ in fields.items():
-        if key not in q:
-            continue
-        val: Any = q[key]
-        if typ is bool or typ == bool | None:
-            val = _to_bool(val)
-        elif typ in (int, int | None) and val:
-            try:
-                val = int(val)
-            except ValueError:
-                continue
-        out[key] = val
-    return out
 
 
 def _proxy_opts(proxy: Any) -> dict[str, Any] | None:
@@ -171,106 +138,226 @@ async def _run(job: Callable[..., Awaitable[Any]], req: Any) -> Any:
                 log.exception("failed to close context")
 
 
-async def _render_endpoint(request: Request) -> Response:
-    if auth := _check_auth(request):
-        return auth
-    try:
-        if request.method == "GET":
-            from .schemas import RENDER_QUERY
-
-            req = RenderRequest.model_validate(_from_query(request, RENDER_QUERY))
-        else:
-            body = await _read_body(request)
-            req = RenderRequest.model_validate(body)
-        res = await _run(render, req)
-        headers = {
-            "X-Dvara-Status": str(res["status"]),
-            "X-Dvara-Final-Url": res["final_url"],
-            "X-Dvara-Content-Url": res["content_url"],
-        }
-        if req.response_format == "json":
-            return JSONResponse(
-                content={
-                    "url": res["url"],
-                    "status": res["status"],
-                    "final_url": res["final_url"],
-                    "content_url": res["content_url"],
-                    "title": res["title"],
-                    "content": res["content"],
-                },
-                headers=headers,
-            )
-        return Response(content=res["content"], media_type="text/html; charset=utf-8", headers=headers)
-    except DvaraError as e:
-        return JSONResponse(status_code=e.status_code, content=http_error(e.status_code, e.code, str(e)))
-    except Exception as e:  # noqa: BLE001
-        log.exception("render failed")
-        return JSONResponse(status_code=500, content=http_error(500, "internal", str(e)))
-
-
-async def _extract_endpoint(request: Request) -> Response:
-    if auth := _check_auth(request):
-        return auth
-    try:
-        if request.method == "GET":
-            q = _from_query(request, {})
-            q["selectors"] = json.loads(request.query_params.get("selectors", "{}"))
-            if request.query_params.get("max_results"):
-                q["max_results"] = int(request.query_params["max_results"])
-            req = ExtractRequest.model_validate(q)
-        else:
-            body = await _read_body(request)
-            req = ExtractRequest.model_validate(body)
-        res = await _run(
-            lambda page, **kw: extract(page, selectors=req.selectors, max_results=req.max_results, **kw),
-            req,
-        )
+def _error_response(exc: Exception) -> Response:
+    if isinstance(exc, DvaraError):
         return JSONResponse(
-            content=ExtractResult(
-                url=res["url"],
-                status=res["status"],
-                final_url=res["final_url"],
-                content_url=res["content_url"],
-                data=res["data"],
-            ).model_dump()
+            status_code=exc.status_code, content=http_error(exc.status_code, exc.code, str(exc))
         )
-    except DvaraError as e:
-        return JSONResponse(status_code=e.status_code, content=http_error(e.status_code, e.code, str(e)))
-    except Exception as e:  # noqa: BLE001
-        log.exception("extract failed")
-        return JSONResponse(status_code=500, content=http_error(500, "internal", str(e)))
+    log.exception("request failed")
+    return JSONResponse(status_code=500, content=http_error(500, "internal", str(exc)))
 
 
-async def _screenshot_endpoint(request: Request) -> Response:
+# ---------------------------------------------------------------------------
+# /v1/render
+# ---------------------------------------------------------------------------
+
+
+async def _render_common(req: Any) -> Response:
+    res = await _run(render, req)
+    headers = {
+        "X-Dvara-Status": str(res["status"]),
+        "X-Dvara-Final-Url": res["final_url"],
+        "X-Dvara-Content-Url": res["content_url"],
+    }
+    if getattr(req, "response_format", "html") == "json":
+        return JSONResponse(
+            content={
+                "url": res["url"],
+                "status": res["status"],
+                "final_url": res["final_url"],
+                "content_url": res["content_url"],
+                "title": res["title"],
+                "content": res["content"],
+            },
+            headers=headers,
+        )
+    return Response(content=res["content"], media_type="text/html; charset=utf-8", headers=headers)
+
+
+@app.post("/v1/render", tags=["render"], summary="Render a page to HTML")
+async def post_render(req: RenderRequest, request: Request) -> Response:
     if auth := _check_auth(request):
         return auth
     try:
-        if request.method == "GET":
-            from .schemas import SCREENSHOT_QUERY
+        return await _render_common(req)
+    except Exception as e:
+        return _error_response(e)
 
-            req = ScreenshotRequest.model_validate(_from_query(request, SCREENSHOT_QUERY))
-        else:
-            body = await _read_body(request)
-            req = ScreenshotRequest.model_validate(body)
-        buf, media, status = await _run(
-            lambda page, **kw: engine_screenshot(
-                page, fmt=req.format, quality=req.quality, full_page=req.full_page, **kw
-            ),
-            req,
+
+@app.get("/v1/render", tags=["render"], summary="Render a page to HTML (query params)")
+async def get_render(
+    request: Request,
+    url: Annotated[str, Query(description="Target http(s) URL")],
+    wait_until: Annotated[WaitUntil, Query()] = "load",
+    wait_for: Annotated[str | None, Query(description="Wait for this CSS selector in the target frame")] = None,
+    wait_timeout_ms: Annotated[int, Query(ge=500, le=120_000)] = 15_000,
+    delay_ms: Annotated[int, Query(ge=0, le=60_000, description="Extra sleep (ms) after load")] = 0,
+    session_id: Annotated[str | None, Query(description="Reuse a persisted browser session")] = None,
+    proxy: Annotated[str | None, Query(description="Proxy URL, e.g. http://user:pass@host:port")] = None,
+    unwrap: Annotated[bool, Query(description="Unwrap cloak/iframe wrapper pages")] = True,
+    timeout_s: Annotated[int, Query(ge=5, le=300, description="Overall timeout (0 = server default)")] = 0,
+    response_format: Annotated[Literal["html", "json"], Query()] = "html",
+) -> Response:
+    if auth := _check_auth(request):
+        return auth
+    try:
+        req = RenderRequest(
+            url=url,
+            wait_until=wait_until,
+            wait_for=wait_for,
+            wait_timeout_ms=wait_timeout_ms,
+            delay_ms=delay_ms,
+            session_id=session_id,
+            proxy=proxy,
+            unwrap=unwrap,
+            timeout_s=timeout_s,
+            response_format=response_format,
         )
-        return Response(
-            content=buf,
-            media_type=media,
-            headers={"X-Dvara-Status": str(status), "X-Dvara-Final-Url": req.url},
+        return await _render_common(req)
+    except Exception as e:
+        return _error_response(e)
+
+
+# ---------------------------------------------------------------------------
+# /v1/extract
+# ---------------------------------------------------------------------------
+
+
+@app.post("/v1/extract", tags=["extract"], summary="Extract text from CSS selectors")
+async def post_extract(req: ExtractRequest, request: Request) -> Response:
+    if auth := _check_auth(request):
+        return auth
+    try:
+        return await _extract_common(req)
+    except Exception as e:
+        return _error_response(e)
+
+
+@app.get("/v1/extract", tags=["extract"], summary="Extract text from CSS selectors (query params)")
+async def get_extract(
+    request: Request,
+    url: Annotated[str, Query(description="Target http(s) URL")],
+    selectors: Annotated[str, Query(description='JSON object, e.g. {"h1": "h1", "prices": ".price"}')],
+    max_results: Annotated[int, Query(ge=1, le=500)] = 100,
+    wait_until: Annotated[WaitUntil, Query()] = "load",
+    wait_for: Annotated[str | None, Query(description="Wait for this CSS selector in the target frame")] = None,
+    wait_timeout_ms: Annotated[int, Query(ge=500, le=120_000)] = 15_000,
+    delay_ms: Annotated[int, Query(ge=0, le=60_000, description="Extra sleep (ms) after load")] = 0,
+    session_id: Annotated[str | None, Query(description="Reuse a persisted browser session")] = None,
+    proxy: Annotated[str | None, Query(description="Proxy URL, e.g. http://user:pass@host:port")] = None,
+    unwrap: Annotated[bool, Query(description="Unwrap cloak/iframe wrapper pages")] = True,
+    timeout_s: Annotated[int, Query(ge=5, le=300, description="Overall timeout (0 = server default)")] = 0,
+) -> Response:
+    if auth := _check_auth(request):
+        return auth
+    try:
+        req = ExtractRequest(
+            url=url,
+            selectors=json.loads(selectors),
+            max_results=max_results,
+            wait_until=wait_until,
+            wait_for=wait_for,
+            wait_timeout_ms=wait_timeout_ms,
+            delay_ms=delay_ms,
+            session_id=session_id,
+            proxy=proxy,
+            unwrap=unwrap,
+            timeout_s=timeout_s,
         )
-    except DvaraError as e:
-        return JSONResponse(status_code=e.status_code, content=http_error(e.status_code, e.code, str(e)))
-    except Exception as e:  # noqa: BLE001
-        log.exception("screenshot failed")
-        return JSONResponse(status_code=500, content=http_error(500, "internal", str(e)))
+        return await _extract_common(req)
+    except Exception as e:
+        return _error_response(e)
 
 
-@app.get("/health")
+async def _extract_common(req: Any) -> Response:
+    res = await _run(
+        lambda page, **kw: extract(page, selectors=req.selectors, max_results=req.max_results, **kw),
+        req,
+    )
+    return JSONResponse(
+        content=ExtractResult(
+            url=res["url"],
+            status=res["status"],
+            final_url=res["final_url"],
+            content_url=res["content_url"],
+            data=res["data"],
+        ).model_dump()
+    )
+
+
+# ---------------------------------------------------------------------------
+# /v1/screenshot
+# ---------------------------------------------------------------------------
+
+
+@app.post("/v1/screenshot", tags=["screenshot"], summary="Capture a screenshot")
+async def post_screenshot(req: ScreenshotRequest, request: Request) -> Response:
+    if auth := _check_auth(request):
+        return auth
+    try:
+        return await _screenshot_common(req)
+    except Exception as e:
+        return _error_response(e)
+
+
+@app.get("/v1/screenshot", tags=["screenshot"], summary="Capture a screenshot (query params)")
+async def get_screenshot(
+    request: Request,
+    url: Annotated[str, Query(description="Target http(s) URL")],
+    format: Annotated[Literal["png", "jpeg"], Query()] = "png",
+    quality: Annotated[int, Query(ge=1, le=100)] = 85,
+    full_page: Annotated[bool, Query(description="Capture the full page height")] = False,
+    wait_until: Annotated[WaitUntil, Query()] = "load",
+    wait_for: Annotated[str | None, Query(description="Wait for this CSS selector in the target frame")] = None,
+    wait_timeout_ms: Annotated[int, Query(ge=500, le=120_000)] = 15_000,
+    delay_ms: Annotated[int, Query(ge=0, le=60_000, description="Extra sleep (ms) after load")] = 0,
+    session_id: Annotated[str | None, Query(description="Reuse a persisted browser session")] = None,
+    proxy: Annotated[str | None, Query(description="Proxy URL, e.g. http://user:pass@host:port")] = None,
+    unwrap: Annotated[bool, Query(description="Unwrap cloak/iframe wrapper pages")] = True,
+    timeout_s: Annotated[int, Query(ge=5, le=300, description="Overall timeout (0 = server default)")] = 0,
+) -> Response:
+    if auth := _check_auth(request):
+        return auth
+    try:
+        req = ScreenshotRequest(
+            url=url,
+            format=format,
+            quality=quality,
+            full_page=full_page,
+            wait_until=wait_until,
+            wait_for=wait_for,
+            wait_timeout_ms=wait_timeout_ms,
+            delay_ms=delay_ms,
+            session_id=session_id,
+            proxy=proxy,
+            unwrap=unwrap,
+            timeout_s=timeout_s,
+        )
+        return await _screenshot_common(req)
+    except Exception as e:
+        return _error_response(e)
+
+
+async def _screenshot_common(req: Any) -> Response:
+    buf, media, status = await _run(
+        lambda page, **kw: engine_screenshot(
+            page, fmt=req.format, quality=req.quality, full_page=req.full_page, **kw
+        ),
+        req,
+    )
+    return Response(
+        content=buf,
+        media_type=media,
+        headers={"X-Dvara-Status": str(status), "X-Dvara-Final-Url": req.url},
+    )
+
+
+# ---------------------------------------------------------------------------
+# misc
+# ---------------------------------------------------------------------------
+
+
+@app.get("/health", tags=["system"])
 async def health(request: Request) -> dict:
     if auth := _check_auth(request):
         return auth  # type: ignore[return-value]
@@ -278,22 +365,7 @@ async def health(request: Request) -> dict:
     return {"status": "ok", "pool": hp, "max_concurrent": settings.max_concurrent}
 
 
-@app.api_route("/v1/render", methods=["GET", "POST"])
-async def v1_render(request: Request) -> Response:
-    return await _render_endpoint(request)
-
-
-@app.api_route("/v1/extract", methods=["GET", "POST"])
-async def v1_extract(request: Request) -> Response:
-    return await _extract_endpoint(request)
-
-
-@app.api_route("/v1/screenshot", methods=["GET", "POST"])
-async def v1_screenshot(request: Request) -> Response:
-    return await _screenshot_endpoint(request)
-
-
-@app.post("/v1/session")
+@app.post("/v1/session", tags=["sessions"], summary="Create a new browser session")
 async def create_session(request: Request) -> Response:
     if auth := _check_auth(request):
         return auth
@@ -301,7 +373,7 @@ async def create_session(request: Request) -> Response:
     return JSONResponse(status_code=201, content={"session_id": sid})
 
 
-@app.delete("/v1/session/{session_id}")
+@app.delete("/v1/session/{session_id}", tags=["sessions"], summary="Delete a browser session")
 async def delete_session(session_id: str, request: Request) -> Response:
     if auth := _check_auth(request):
         return auth

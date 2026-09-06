@@ -1,6 +1,6 @@
 # dvara
 
-Anti-detect scraping engine as a REST API. Built on **Camoufox** (a stealth-patched Firefox) so sites that block plain HTTP fetches — JS challenges, cookie redirects, wrapper/iframe cloaking — render like a real browser would.
+Anti-detect scraping engine as a REST API. Built on **Camoufox** (a stealth-patched Firefox) so sites that block plain HTTP fetches (JS challenges, cookie redirects, wrapper/iframe cloaking) render like a real browser would.
 
 Works like ScrapingAnt/ScrapingBee, but self-hosted: you keep the browser engine, proxy control, and the HTML out of any third-party dependency.
 
@@ -91,12 +91,12 @@ Common options (both methods):
 | Field | Default | Description |
 |---|---|---|
 | `wait_until` | `load` | `load`, `domcontentloaded`, or `networkidle`. |
-| `wait_for` | — | CSS selector; waits until it exists in the target frame before returning. |
+| `wait_for` | none | CSS selector; waits until it exists in the target frame before returning. |
 | `wait_timeout_ms` | `15000` | How long to wait for `wait_for`. |
 | `delay_ms` | `0` | Extra sleep after page load (lets lazy JS finish). |
 | `unwrap` | `true` | Auto-detect cloak wrapper and return the real iframe content. `false` returns the raw top document. |
-| `proxy` | — | Proxy for this request. String URL or `{"server","username","password"}`. Credentials may also live in the URL. |
-| `session_id` | — | Persist/restore cookies & localStorage for this id. |
+| `proxy` | none | Proxy for this request. String URL or `{"server","username","password"}`. Credentials may also live in the URL. |
+| `session_id` | none | Persist/restore cookies & localStorage for this id. |
 | `timeout_s` | `0` | Overall timeout (5–300). `0` = `DVARA_TIMEOUT_S`. |
 
 ### Render HTML
@@ -196,7 +196,7 @@ or
 {"url": "...", "proxy": {"server": "http://host:port", "username": "user", "password": "pass"}}
 ```
 
-When using a proxy for geo-targeted scraping, set Camoufox's `os`/`locale` expectations yourself if needed — by default fingerprints are drawn from real-world distribution and may not match your exit country.
+When using a proxy for geo-targeted scraping, set Camoufox's `os`/`locale` expectations yourself if needed. By default, fingerprints are drawn from real-world distribution and may not match your exit country.
 
 ## Docker
 

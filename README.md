@@ -108,7 +108,7 @@ POST example:
 ```bash
 curl -X POST http://localhost:8080/v1/render \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://1530ofarrellst1.com", "response_format": "json"}'
+  -d '{"url": "https://example.com", "response_format": "json"}'
 ```
 
 - Default response: the HTML body (`text/html`).

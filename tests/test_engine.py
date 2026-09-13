@@ -7,6 +7,8 @@ Covered:
   4. screenshot produces a non-empty PNG
   5. SQLite session store persists / restores / deletes
 
+Note: Gambling-themed HTML below is fixture data for testing only.
+
 Run with: uv run python tests/test_engine.py
 """
 

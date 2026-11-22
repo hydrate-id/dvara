@@ -5,8 +5,16 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from camoufox.async_api import AsyncCamoufox
-from playwright.async_api import Browser, Frame, Page, TimeoutError as PWTimeoutError
+from patchright.async_api import (
+    Browser,
+    Frame,
+    Page,
+    Playwright,
+    TimeoutError as PWTimeoutError,
+    async_playwright,
+)
+from scrapling.engines._browsers._config_tools import __default_useragent__
+from scrapling.engines.constants import DEFAULT_ARGS, HARMFUL_ARGS, STEALTH_ARGS
 
 from .config import settings
 
@@ -22,32 +30,63 @@ def _looks_like_wrapper(html: str) -> bool:
     return any(m in html or m.lower() in low for m in WRAPPER_MARKERS)
 
 
+def launch_args() -> list[str]:
+    """Chromium flags: Scrapling's stealth set plus optional DVARA_BROWSER_EXTRA."""
+    extra = settings.browser_extra.split() if settings.browser_extra else []
+    return list(dict.fromkeys([*DEFAULT_ARGS, *STEALTH_ARGS, *extra]))
+
+
+def context_options() -> dict[str, Any]:
+    """Per-request context options, mirroring Scrapling's StealthySession."""
+    return {
+        "user_agent": __default_useragent__,
+        "color_scheme": "dark",
+        "device_scale_factor": settings.device_scale_factor,
+        "is_mobile": False,
+        "has_touch": False,
+        "service_workers": "allow",
+        "ignore_https_errors": True,
+        "screen": {"width": 1920, "height": 1080},
+        "viewport": {"width": 1920, "height": 1080},
+        "permissions": ["geolocation", "notifications"],
+    }
+
+
 @dataclass
 class _Slot:
     index: int
-    cam: AsyncCamoufox | None = None
+    pw: Playwright | None = None
     browser: Browser | None = None
 
     async def launch(self) -> None:
-        if self.cam is not None:
-            await self.cam.__aexit__(None, None, None)
-            self.cam = None
-        self.browser = None
-        cam = AsyncCamoufox(headless=settings.headless)
+        await self.stop()
+        pw = await async_playwright().start()
         try:
-            browser = await cam.__aenter__()
+            browser = await pw.chromium.launch(
+                headless=settings.headless,
+                channel="chromium",
+                args=launch_args(),
+                ignore_default_args=list(HARMFUL_ARGS),
+            )
         except BaseException:
-            await cam.__aexit__(None, None, None)
+            await pw.stop()
             raise
-        self.cam, self.browser = cam, browser
+        self.pw, self.browser = pw, browser
 
     async def stop(self) -> None:
-        if self.cam is not None:
-            try:
-                await self.cam.__aexit__(None, None, None)
-            finally:
-                self.cam = None
-                self.browser = None
+        browser, pw = self.browser, self.pw
+        self.browser = self.pw = None
+        try:
+            if browser is not None:
+                await browser.close()
+        except Exception:
+            log.debug("browser close failed", exc_info=True)
+        finally:
+            if pw is not None:
+                try:
+                    await pw.stop()
+                except Exception:
+                    log.debug("playwright stop failed", exc_info=True)
 
 
 class BrowserPool:

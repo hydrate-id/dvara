@@ -14,6 +14,7 @@ from .config import settings
 from .engine import (
     BrowserPool,
     DvaraError,
+    context_options,
     extract,
     render,
     screenshot as engine_screenshot,
@@ -98,7 +99,7 @@ async def _run(job: Callable[..., Awaitable[Any]], req: Any) -> Any:
     timeout_s = req.timeout_s or settings.request_timeout_s
     async with pool.sem:
         browser = await pool.acquire()
-        ctx_opts: dict[str, Any] = {}
+        ctx_opts: dict[str, Any] = context_options()
         if po := _proxy_opts(req.proxy):
             ctx_opts["proxy"] = po
         if req.session_id:
@@ -195,7 +196,7 @@ async def get_render(
     session_id: Annotated[str | None, Query(description="Reuse a persisted browser session")] = None,
     proxy: Annotated[str | None, Query(description="Proxy URL, e.g. http://user:pass@host:port")] = None,
     unwrap: Annotated[bool, Query(description="Unwrap cloak/iframe wrapper pages")] = True,
-    timeout_s: Annotated[int, Query(ge=5, le=300, description="Overall timeout (0 = server default)")] = 0,
+    timeout_s: Annotated[int, Query(ge=0, le=300, description="Overall timeout, 5-300 (0 = server default)")] = 0,
     response_format: Annotated[Literal["html", "json"], Query()] = "html",
 ) -> Response:
     if auth := _check_auth(request):
@@ -246,7 +247,7 @@ async def get_extract(
     session_id: Annotated[str | None, Query(description="Reuse a persisted browser session")] = None,
     proxy: Annotated[str | None, Query(description="Proxy URL, e.g. http://user:pass@host:port")] = None,
     unwrap: Annotated[bool, Query(description="Unwrap cloak/iframe wrapper pages")] = True,
-    timeout_s: Annotated[int, Query(ge=5, le=300, description="Overall timeout (0 = server default)")] = 0,
+    timeout_s: Annotated[int, Query(ge=0, le=300, description="Overall timeout, 5-300 (0 = server default)")] = 0,
 ) -> Response:
     if auth := _check_auth(request):
         return auth
@@ -314,7 +315,7 @@ async def get_screenshot(
     session_id: Annotated[str | None, Query(description="Reuse a persisted browser session")] = None,
     proxy: Annotated[str | None, Query(description="Proxy URL, e.g. http://user:pass@host:port")] = None,
     unwrap: Annotated[bool, Query(description="Unwrap cloak/iframe wrapper pages")] = True,
-    timeout_s: Annotated[int, Query(ge=5, le=300, description="Overall timeout (0 = server default)")] = 0,
+    timeout_s: Annotated[int, Query(ge=0, le=300, description="Overall timeout, 5-300 (0 = server default)")] = 0,
 ) -> Response:
     if auth := _check_auth(request):
         return auth

@@ -1,6 +1,6 @@
 # dvara
 
-Anti-detect scraping engine as a REST API. Built on **Camoufox** (a stealth-patched Firefox) so sites that block plain HTTP fetches (JS challenges, cookie redirects, wrapper/iframe cloaking) render like a real browser would.
+Anti-detect scraping engine as a REST API. Built on **Scrapling**'s stealth browser stack (patchright Chromium with anti-detection flags) so sites that block plain HTTP fetches (JS challenges, cookie redirects, wrapper/iframe cloaking) render like a real browser would.
 
 Works like ScrapingAnt/ScrapingBee, but self-hosted: you keep the browser engine, proxy control, and the HTML out of any third-party dependency.
 
@@ -12,7 +12,7 @@ Works like ScrapingAnt/ScrapingBee, but self-hosted: you keep the browser engine
 - Persistent browser sessions (cookies/localStorage) for logged-in or challenge-protected domains
 - Auto **wrapper unwrapping**: many gambling/scam sites serve a tiny cloak page that embeds the real content in an iframe; dvara detects it, waits for the real frame to finish loading, and returns that content
 - Optional proxy per request, or one default proxy for all traffic
-- Camoufox fingerprints (OS, UA, screen, etc.) are randomized per browser process and cannot be changed at runtime
+- The fingerprint (UA, screen, flags) comes from Scrapling's stealth defaults and is the same for every request unless you change `context_options()` in `dvara/engine.py`
 - Built for concurrency: a pool of browser processes, each serving multiple isolated incognito contexts
 
 ## Why plain fetch fails and this works
@@ -25,7 +25,7 @@ entry URL -> JS challenge (spinner) -> cloak page -> iframe /sttcs/ -> real cont
 
 The challenge sets cookies (e.g. `wtoken`, `wtime`), the cloak page loads a script that injects an iframe, and the iframe content grows into the real page over seconds. dvara:
 
-1. Navigates with a real browser (Camoufox, headless).
+1. Navigates with a real browser (Scrapling stealth Chromium, headless).
 2. Sees the top document is a wrapper (small page with known markers).
 3. Polls child frames until the largest one is stable across two reads.
 4. Returns the real frame's HTML, or screenshots it by growing the iframe to full height.
@@ -37,7 +37,7 @@ Client ──> FastAPI routes (auth, validation)
                 │
                 ▼
             EngineService (async)
-             ├── BrowserPool      N × Camoufox processes (round-robin, auto-reload dead ones)
+             ├── BrowserPool      N × Chromium processes (round-robin, auto-reload dead ones)
              ├── pipeline         goto -> challenge settle -> unwrap -> actions -> result
              └── SessionStore     SQLite (storage_state per session_id)
 ```
@@ -56,13 +56,11 @@ Client ──> FastAPI routes (auth, validation)
 
 ```bash
 uv sync
-uv run python -m camoufox fetch        # downloads the Camoufox browser binary
+uv run patchright install chromium     # downloads the Chromium binary
 DVARA_POOL_SIZE=2 uv run uvicorn dvara.main:app --reload
 ```
 
 Open http://localhost:8080/docs for the interactive API browser.
-
-Note: `camoufox fetch` lists releases through the GitHub API and can hit the rate limit. Retry after an hour, or install the browser binary manually (the Dockerfile does this and is a reference for the layout).
 
 ## Configuration
 
@@ -73,11 +71,13 @@ Environment variables (see `.env.example`):
 | `DVARA_API_KEY` | empty | Static API key. Empty = no auth (dev/internal). |
 | `DVARA_HOST` | `0.0.0.0` | Bind address. |
 | `DVARA_PORT` | `8080` | Bind port. |
-| `DVARA_POOL_SIZE` | `2` | Concurrent Firefox processes (~300MB each). VPS RAM: 4GB→4, 8GB→8, 16GB→16. |
+| `DVARA_POOL_SIZE` | `2` | Concurrent Chromium processes (~300MB each). VPS RAM: 4GB→4, 8GB→8, 16GB→16. |
 | `DVARA_MAX_CONCURRENT` | `8` | Max tasks running at once (each = one context). |
 | `DVARA_TIMEOUT_S` | `70` | Default per-request timeout (seconds). |
 | `DVARA_DB` | `dvara.db` | SQLite session database path. |
 | `DVARA_HEADLESS` | `1` | `0` shows a browser window (debugging only). |
+| `DVARA_DEVICE_SCALE_FACTOR` | `1` | Pixel density. `2` gives retina screenshots (4x pixels, larger and slower). |
+| `DVARA_BROWSER_EXTRA` | empty | Extra Chromium flags, space separated. |
 | `DVARA_DEFAULT_PROXY` | empty | Proxy used when a request sends none. |
 
 ## API
@@ -196,7 +196,7 @@ or
 {"url": "...", "proxy": {"server": "http://host:port", "username": "user", "password": "pass"}}
 ```
 
-When using a proxy for geo-targeted scraping, set Camoufox's `os`/`locale` expectations yourself if needed. By default, fingerprints are drawn from real-world distribution and may not match your exit country.
+When using a proxy for geo-targeted scraping, note that the browser locale and timezone follow the host and may not match your exit country.
 
 ## Docker
 
@@ -204,20 +204,20 @@ When using a proxy for geo-targeted scraping, set Camoufox's `os`/`locale` expec
 docker compose up -d --build
 ```
 
-- Bakes the Camoufox browser binary into the image (pinned `CAMOUFOX_VERSION` in the `Dockerfile`/`compose.yaml`, so builds do not hit GitHub API rate limits).
-- Change `CAMOUFOX_ARCH` to `arm64` for ARM nodes.
+- Installs Chromium and its system libraries into the image with `patchright install --with-deps chromium`.
+- Playwright publishes Chromium builds for x86_64 and arm64, so no arch setting is needed (only x86_64 has been tested here).
+- `compose.yaml` forwards the `DVARA_*` variables above (API key, pool, timeout, proxy, device scale factor, extra flags). Set them in `.env` or your shell.
 - Sessions persist in the `dvara-data` volume (`/data`).
 - `mem_limit` defaults to 4g; raise it with your pool size.
 
 ## Tests
 
-Self-contained engine checks (local HTTP target, no internet):
+Self-contained checks (local HTTP target, no internet):
 
 ```bash
-uv run python tests/test_engine.py
+uv run python tests/test_engine.py   # engine: render, unwrap, extract, screenshot, session store
+uv run python tests/test_api.py      # HTTP API: auth, render/extract/screenshot, session cookies, proxy parsing
 ```
-
-Covers: normal-site rendering, wrapper unwrap, extract on the real frame, screenshot, and the SQLite session store.
 
 ## Tuning
 
@@ -227,6 +227,6 @@ Covers: normal-site rendering, wrapper unwrap, extract on the real frame, screen
 
 ## Limitations
 
-- Camoufox is an anti-detect browser, not a guarantee. Advanced WAFs (e.g. Cloudflare Interstitial, which probes the JS engine) can still block it. Upstream Camoufox is under active development.
+- Scrapling's stealth Chromium is not a guarantee. Advanced WAFs (e.g. Cloudflare Interstitial) can still block it.
 - Some cloaked gambling domains do not show content directly: the entry domain resolves to a list of active mirror domains (often obfuscated in base64) served from a CDN. dvara returns what the browser renders at the entry; chasing mirror hops to the final brand page is up to the consuming service.
-- Fingerprints are per browser process and fixed at launch. Per-request OS/UA spoofing is not possible with a pooled design; recycle the whole process to change identity.
+- The fingerprint is not randomized: every request uses the same Scrapling defaults (UA, viewport). Launch flags are fixed per browser process (`DVARA_BROWSER_EXTRA`); UA and viewport are set per context in `context_options()`.

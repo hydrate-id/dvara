@@ -22,13 +22,15 @@ class _BaseJob(BaseModel):
     session_id: str | None = None
     proxy: Proxy | str | None = None
     unwrap: bool = True
-    timeout_s: int = Field(default=0, ge=5, le=300)  # 0 = use config default
+    timeout_s: int = Field(default=0, ge=0, le=300)  # 0 = use config default; otherwise 5..300
 
     @model_validator(mode="after")
     def _check_url(self) -> "_BaseJob":
         # Manual check: HttpUrl rejects URLs that real-world sites use
         if not (self.url.startswith("http://") or self.url.startswith("https://")):
             raise ValueError("url must be http(s)")
+        if 0 < self.timeout_s < 5:
+            raise ValueError("timeout_s must be 0 (server default) or between 5 and 300")
         return self
 
 

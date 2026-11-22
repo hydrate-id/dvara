@@ -1,7 +1,8 @@
 """Self-check of the dvara engine against a local HTTP target (no internet).
 
 Covered:
-  1. normal site -> render the top document directly (not a wrapper)
+  1. normal site -> render the top document directly (not a wrapper),
+     inside a context built from context_options() (UA, no webdriver)
   2. gambling-style wrapper (/wrap + iframe /inner) -> unwrap to real content
   3. extract runs its selectors against the real frame
   4. screenshot produces a non-empty PNG
@@ -20,7 +21,7 @@ import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dvara.engine import BrowserPool, extract, render, screenshot
+from dvara.engine import BrowserPool, context_options, extract, render, screenshot
 from dvara.sessions import SessionStore
 
 INNER = b"""<!DOCTYPE html><html><head><title>Situs Judol 88</title></head>
@@ -77,12 +78,18 @@ async def main():
         browser = await pool.acquire()
 
         # 1. normal site: top document is returned directly, not a wrapper
-        ctx = await browser.new_context()
+        ctx = await browser.new_context(**context_options())
         page = await ctx.new_page()
         r = await render(page, f"{base}/plain", "load", True, None, 10_000, 0, 30)
         assert r["content_url"] == f"{base}/plain", r["content_url"]
         assert "Halo dunia" in r["content"], "normal site content missing"
         print("ok 1 normal site -> top document")
+
+        # 1b. stealth context options are applied (this is the production path)
+        ua = await page.evaluate("navigator.userAgent")
+        assert ua == context_options()["user_agent"], ua
+        assert await page.evaluate("navigator.webdriver") is not True, "navigator.webdriver leaked"
+        print("ok 1b stealth context options applied")
 
         # 2. gambling wrapper: unwrap to the real iframe
         r = await render(page, f"{base}/wrap", "load", True, None, 10_000, 0, 30)

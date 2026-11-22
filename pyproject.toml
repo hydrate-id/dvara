@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
-    "camoufox>=0.5.6",
+    "scrapling[fetchers]>=0.5.1",
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.4",
 ]

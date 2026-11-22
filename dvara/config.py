@@ -16,6 +16,8 @@ class Settings:
         self.browser_extra: str | None = os.getenv("DVARA_BROWSER_EXTRA") or None
         # default wait_until used by render/extract/screenshot
         self.wait_until: str = os.getenv("DVARA_WAIT_UNTIL", "load")
+        # Chromium device scale factor: 1 = normal-size screenshots, 2 = retina (4x pixels)
+        self.device_scale_factor: float = float(os.getenv("DVARA_DEVICE_SCALE_FACTOR", "1"))
         self.default_proxy: str | None = os.getenv("DVARA_DEFAULT_PROXY") or None
 
     @property
